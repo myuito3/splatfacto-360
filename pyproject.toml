@@ -1,0 +1,12 @@
+[project]
+name = "splatfacto-360"
+version = "0.0.0"
+
+dependencies=[
+]
+
+[tool.setuptools.packages.find]
+include = ["splatfacto_360*"]
+
+[project.entry-points.'nerfstudio.method_configs']
+splatfacto-360 = 'splatfacto_360.splatfacto_360_config:splatfacto_360_method'
