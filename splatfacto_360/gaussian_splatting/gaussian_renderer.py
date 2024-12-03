@@ -32,6 +32,7 @@ def render(
     opacities,
     active_sh_degree,
     bg_color: torch.Tensor,
+    spherical=False,
     scaling_modifier=1.0,
 ):
     """
@@ -66,7 +67,7 @@ def render(
         sh_degree=active_sh_degree,
         campos=viewpoint_camera.camera_center,
         prefiltered=False,
-        spherical=False,
+        spherical=spherical,
         debug=False,
     )
 

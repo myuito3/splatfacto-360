@@ -36,7 +36,7 @@ class ColmapCamera:
 
         self.image_width = image_width
         self.image_height = image_height
-        self.zfar = 1e10
+        self.zfar = 100.0
         self.znear = 0.01
         self.trans = trans
         self.scale = scale

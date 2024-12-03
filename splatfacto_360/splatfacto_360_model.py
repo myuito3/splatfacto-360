@@ -24,7 +24,7 @@ from typing import Dict, List, Type, Union
 
 import torch
 
-from nerfstudio.cameras.cameras import Cameras
+from nerfstudio.cameras.cameras import CameraType, Cameras
 from nerfstudio.models.splatfacto import SplatfactoModel, SplatfactoModelConfig
 from splatfacto_360.gaussian_splatting.cameras import convert_to_colmap_camera
 from splatfacto_360.gaussian_splatting.gaussian_renderer import render
@@ -139,6 +139,9 @@ class Splatfacto360Model(SplatfactoModel):
             colors_crop = torch.sigmoid(colors_crop)
             sh_degree_to_use = None
 
+        # TODO: novel view should be rendered with a perspective camera
+        spherical = True  # camera.camera_type == CameraType.EQUIRECTANGULAR
+
         render_outputs = render(
             viewpoint_camera=colmap_camera,
             means=means_crop,
@@ -148,6 +151,7 @@ class Splatfacto360Model(SplatfactoModel):
             opacities=torch.sigmoid(opacities_crop),
             active_sh_degree=sh_degree_to_use,
             bg_color=self._get_background_color(),
+            spherical=spherical,
         )
 
         if self.training and render_outputs["viewspace_points"].requires_grad:
@@ -156,7 +160,7 @@ class Splatfacto360Model(SplatfactoModel):
         self.radii = render_outputs["radii"]  # [N]
 
         rgb = render_outputs["render"].permute(1, 2, 0).squeeze(0)
-        fake_depth = torch.zeros((*self.last_size, 1)).cuda()
+        fake_depth = torch.ones((*self.last_size, 1)).cuda() * 1000
 
         return {
             "rgb": rgb,  # type: ignore
