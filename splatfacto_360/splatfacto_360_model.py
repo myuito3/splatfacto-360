@@ -48,13 +48,13 @@ class Splatfacto360Model(SplatfactoModel):
 
     def after_train(self, step: int):
         assert step == self.step
+        # to save some training time, we no longer need to update those stats post refinement
         if self.step >= self.config.stop_split_at:
             return
-
         with torch.no_grad():
             # keep track of a moving average of grad norms
             visible_mask = (self.radii > 0).flatten()
-
+            grads = torch.norm(self.xys.grad[visible_mask, :2], dim=-1)
             # print(f"grad norm min {grads.min().item()} max {grads.max().item()} mean {grads.mean().item()} size {grads.shape}")
             if self.xys_grad_norm is None:
                 self.xys_grad_norm = torch.zeros(
@@ -64,12 +64,8 @@ class Splatfacto360Model(SplatfactoModel):
                     self.num_points, device=self.device, dtype=torch.float32
                 )
             assert self.vis_counts is not None
-
-            grads = self.xys_grad_norm / self.vis_counts
-            grads[grads.isnan()] = 0.0
             self.vis_counts[visible_mask] += 1
-            self.xys_grad_norm[visible_mask] += grads[visible_mask]
-
+            self.xys_grad_norm[visible_mask] += grads
             # update the max screen size, as a ratio of number of pixels
             if self.max_2Dsize is None:
                 self.max_2Dsize = torch.zeros_like(self.radii, dtype=torch.float32)
@@ -156,8 +152,8 @@ class Splatfacto360Model(SplatfactoModel):
 
         if self.training and render_outputs["viewspace_points"].requires_grad:
             render_outputs["viewspace_points"].retain_grad()
-        self.xys = render_outputs["viewspace_points"].unsqueeze(0)  # [1, N, 2]
-        self.radii = render_outputs["radii"]  # [N]
+        self.xys = render_outputs["viewspace_points"]
+        self.radii = render_outputs["radii"]
 
         rgb = render_outputs["render"].permute(1, 2, 0).squeeze(0)
         fake_depth = torch.ones((*self.last_size, 1)).cuda() * 1000
