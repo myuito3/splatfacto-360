@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Type, Union
 
 import torch
+from torchvision.utils import save_image
 
 from nerfstudio.cameras.cameras import CameraType, Cameras
 from nerfstudio.models.splatfacto import SplatfactoModel, SplatfactoModelConfig
@@ -123,6 +124,10 @@ class Splatfacto360Model(SplatfactoModel):
         camera_scale_fac = self._get_downscale_factor()
         camera.rescale_output_resolution(1 / camera_scale_fac)
 
+        c2w = camera.camera_to_worlds.clone()
+        c2w[0, :3, :3] = c2w[0, :3, :3] @ rad2rotmat(deg2rad(180), 0, 0).to(c2w.device)
+        camera.camera_to_worlds = c2w
+
         colmap_camera = convert_to_colmap_camera(camera)
         self.last_size = (colmap_camera.image_height, colmap_camera.image_width)
         camera.rescale_output_resolution(camera_scale_fac)  # type: ignore
@@ -155,7 +160,11 @@ class Splatfacto360Model(SplatfactoModel):
         self.xys = render_outputs["viewspace_points"]
         self.radii = render_outputs["radii"]
 
-        rgb = render_outputs["render"].permute(1, 2, 0).squeeze(0)
+        rgb = render_outputs["render"]
+        if self.step % 50 == 0:
+            save_image(rgb.cpu(), f"outputs/render_{self.step}.png")
+
+        rgb = rgb.permute(1, 2, 0).squeeze(0)
         fake_depth = torch.ones((*self.last_size, 1)).cuda() * 1000
 
         return {
@@ -173,3 +182,113 @@ class Splatfacto360Model(SplatfactoModel):
             background: the background color
         """
         return image[..., :3]
+
+    def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
+        """Compute and returns metrics.
+
+        Args:
+            outputs: the output to compute loss dict to
+            batch: ground truth batch corresponding to outputs
+        """
+        gt_rgb = self.composite_with_background(
+            self.get_gt_img(batch["image"]), outputs["background"]
+        )
+
+        w_2 = gt_rgb.shape[1] // 2
+        rotated_gt_rgb = torch.zeros_like(gt_rgb).to(gt_rgb)
+        rotated_gt_rgb[:, :w_2, :] = gt_rgb[:, w_2:, :]
+        rotated_gt_rgb[:, w_2:, :] = gt_rgb[:, :w_2, :]
+        gt_rgb = rotated_gt_rgb
+
+        metrics_dict = {}
+        predicted_rgb = outputs["rgb"]
+        metrics_dict["psnr"] = self.psnr(predicted_rgb, gt_rgb)
+
+        metrics_dict["gaussian_count"] = self.num_points
+
+        self.camera_optimizer.get_metrics_dict(metrics_dict)
+        return metrics_dict
+
+    def get_loss_dict(
+        self, outputs, batch, metrics_dict=None
+    ) -> Dict[str, torch.Tensor]:
+        """Computes and returns the losses dict.
+
+        Args:
+            outputs: the output to compute loss dict to
+            batch: ground truth batch corresponding to outputs
+            metrics_dict: dictionary of metrics, some of which we can use for loss
+        """
+        gt_img = self.composite_with_background(
+            self.get_gt_img(batch["image"]), outputs["background"]
+        )
+        pred_img = outputs["rgb"]
+
+        w_2 = gt_img.shape[1] // 2
+        rotated_gt_rgb = torch.zeros_like(gt_img).to(gt_img)
+        rotated_gt_rgb[:, :w_2, :] = gt_img[:, w_2:, :]
+        rotated_gt_rgb[:, w_2:, :] = gt_img[:, :w_2, :]
+        gt_img = rotated_gt_rgb
+
+        if self.step % 50 == 0:
+            save_image(gt_img.permute(2, 0, 1).cpu(), f"outputs/gt_{self.step}.png")
+
+        # Set masked part of both ground-truth and rendered image to black.
+        # This is a little bit sketchy for the SSIM loss.
+        if "mask" in batch:
+            # batch["mask"] : [H, W, 1]
+            mask = self._downscale_if_required(batch["mask"])
+            mask = mask.to(self.device)
+            assert mask.shape[:2] == gt_img.shape[:2] == pred_img.shape[:2]
+            gt_img = gt_img * mask
+            pred_img = pred_img * mask
+
+        Ll1 = torch.abs(gt_img - pred_img).mean()
+        simloss = 1 - self.ssim(
+            gt_img.permute(2, 0, 1)[None, ...], pred_img.permute(2, 0, 1)[None, ...]
+        )
+        if self.config.use_scale_regularization and self.step % 10 == 0:
+            scale_exp = torch.exp(self.scales)
+            scale_reg = (
+                torch.maximum(
+                    scale_exp.amax(dim=-1) / scale_exp.amin(dim=-1),
+                    torch.tensor(self.config.max_gauss_ratio),
+                )
+                - self.config.max_gauss_ratio
+            )
+            scale_reg = 0.1 * scale_reg.mean()
+        else:
+            scale_reg = torch.tensor(0.0).to(self.device)
+
+        loss_dict = {
+            "main_loss": (1 - self.config.ssim_lambda) * Ll1
+            + self.config.ssim_lambda * simloss,
+            "scale_reg": scale_reg,
+        }
+
+        if self.training:
+            # Add loss from camera optimizer
+            self.camera_optimizer.get_loss_dict(loss_dict)
+
+        return loss_dict
+
+
+import math
+
+
+def deg2rad(deg):
+    return deg * math.pi / 180.0
+
+
+def rad2rotmat(radx, rady, radz):
+    sx = math.sin(radx)
+    sy = math.sin(rady)
+    sz = math.sin(radz)
+    cx = math.cos(radx)
+    cy = math.cos(rady)
+    cz = math.cos(radz)
+    Rx = torch.tensor([[1, 0, 0], [0, cx, sx], [0, -sx, cx]])
+    Ry = torch.tensor([[cy, 0, -sy], [0, 1, 0], [sy, 0, cy]])
+    Rz = torch.tensor([[cz, sz, 0], [-sz, cz, 0], [0, 0, 1]])
+    rotmat = Rx @ Ry @ Rz
+    return rotmat
