@@ -1,5 +1,5 @@
 # splatfacto-360: A Nerfstudio Implementation of Splatfacto with 360-diff-gaussian-rasterization
-This repository is an **UNOFFICIAL** implementation of incorporating the [360-diff-gaussian-rasterization](https://github.com/inuex35/360-diff-gaussian-rasterization) into nerfstudio's splatfacto. This rasterizer has been implemented by inuex35 and can rasterize a equirectangular image from 3D Gaussians.
+This repository is an implementation of incorporating the [360-diff-gaussian-rasterization](https://github.com/inuex35/360-diff-gaussian-rasterization) into nerfstudio's splatfacto. The rasterizer has been implemented by inuex35 and can rasterize a equirectangular image from 3D Gaussians.
 
 ## Installation
 
